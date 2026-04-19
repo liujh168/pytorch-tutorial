@@ -165,14 +165,129 @@ print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 print(f"Logits: {logits.shape}")
 ```
 
+## 深入理解：文本生成采样策略
+
+```python
+import torch
+import torch.nn.functional as F
+
+def greedy_decode(logits_last: torch.Tensor) -> int:
+    """贪心解码：始终选择概率最高的 token"""
+    return logits_last.argmax(dim=-1).item()
+
+
+def temperature_sample(logits_last: torch.Tensor, temperature: float = 1.0) -> int:
+    """温度采样：temperature < 1 更保守，> 1 更随机"""
+    probs = F.softmax(logits_last / temperature, dim=-1)
+    return torch.multinomial(probs, 1).item()
+
+
+def top_k_sample(logits_last: torch.Tensor, k: int = 50) -> int:
+    """Top-K 采样：只从概率最高的 k 个 token 中采样"""
+    values, indices = torch.topk(logits_last, k)
+    probs = F.softmax(values, dim=-1)
+    chosen_idx = torch.multinomial(probs, 1).item()
+    return indices[chosen_idx].item()
+
+
+def top_p_sample(logits_last: torch.Tensor, p: float = 0.9) -> int:
+    """Top-P (Nucleus) 采样：从概率累计超过 p 的最小 token 集中采样"""
+    sorted_logits, sorted_indices = torch.sort(logits_last, descending=True)
+    sorted_probs   = F.softmax(sorted_logits, dim=-1)
+    cumulative_p   = sorted_probs.cumsum(dim=-1)
+    # 保留累积概率超过 p 之前的 token
+    cutoff_mask    = cumulative_p - sorted_probs > p
+    sorted_logits[cutoff_mask] = float('-inf')
+    probs  = F.softmax(sorted_logits, dim=-1)
+    chosen = torch.multinomial(probs, 1).item()
+    return sorted_indices[chosen].item()
+
+
+# 对比演示（使用随机 logits）
+torch.manual_seed(42)
+vocab_size  = 100
+fake_logits = torch.randn(vocab_size)
+fake_logits[5]  = 5.0   # 模拟一个强烈偏好的 token
+fake_logits[10] = 4.0
+
+greedy_id    = greedy_decode(fake_logits)
+temp_low_id  = temperature_sample(fake_logits, temperature=0.3)
+temp_high_id = temperature_sample(fake_logits, temperature=2.0)
+topk_id      = top_k_sample(fake_logits, k=10)
+topp_id      = top_p_sample(fake_logits, p=0.9)
+
+print("采样策略对比:")
+print(f"  Greedy (确定性):    token={greedy_id}  (概率最高的 token)")
+print(f"  Temperature=0.3:   token={temp_low_id}   (保守，集中)")
+print(f"  Temperature=2.0:   token={temp_high_id}  (随机，发散)")
+print(f"  Top-K (k=10):      token={topk_id}")
+print(f"  Top-P (p=0.9):     token={topp_id}")
+
+print("""
+采样策略选择指南:
+  贪心解码   → 代码生成、数学题（需要确定性）
+  低温采样   → 事实性问答、指令遵循
+  Top-P=0.9 → 创意写作、对话（GPT-3/4 默认）
+  高温采样   → 诗歌创作、头脑风暴
+""")
+```
+
+## 深入理解：GPT 参数量计算
+
+```python
+def calculate_gpt_params(vocab_size, n_positions, n_embd, n_layer, n_head):
+    """精确计算 GPT 模型各组件的参数量"""
+    # Token & Position Embedding
+    token_emb  = vocab_size * n_embd
+    pos_emb    = n_positions * n_embd
+
+    # 每个 Transformer Block 的参数
+    # - CausalSelfAttention: c_attn (3*d×d) + c_proj (d×d)
+    attn_params = n_embd * (3 * n_embd) + n_embd * n_embd  # 4 * d^2
+    # - MLP: c_fc (d×4d) + c_proj (4d×d)
+    mlp_params  = n_embd * (4 * n_embd) + (4 * n_embd) * n_embd  # 8 * d^2
+    # - LayerNorm x2: weight + bias
+    ln_params   = 2 * (n_embd * 2)
+
+    per_block   = attn_params + mlp_params + ln_params
+    all_blocks  = n_layer * per_block
+
+    # 最终 LayerNorm + LM Head（与 token_emb 共享权重，不重复计）
+    final_ln    = n_embd * 2
+
+    total = token_emb + pos_emb + all_blocks + final_ln
+
+    print(f"{'组件':^20} {'参数量':>15}")
+    print("-" * 37)
+    print(f"{'Token Embedding':^20} {token_emb:>15,}")
+    print(f"{'Position Embedding':^20} {pos_emb:>15,}")
+    print(f"{'Attention (×layer)':^20} {attn_params:>15,}")
+    print(f"{'MLP (×layer)':^20} {mlp_params:>15,}")
+    print(f"{'LayerNorm (×layer)':^20} {ln_params:>15,}")
+    print(f"{'所有 {n_layer} 层合计':^20} {all_blocks:>15,}")
+    print("-" * 37)
+    print(f"{'总参数量':^20} {total:>15,}  ({total/1e6:.1f}M)")
+    return total
+
+
+print("=== GPT-2 Small (124M) ===")
+calculate_gpt_params(vocab_size=50257, n_positions=1024,
+                     n_embd=768, n_layer=12, n_head=12)
+
+print("\n=== 自定义小模型 ===")
+calculate_gpt_params(vocab_size=5000, n_positions=256,
+                     n_embd=128, n_layer=4, n_head=4)
+```
+
 ## GPT 变体对比
 
-| 模型 | 参数量 | 层数 | 维度 | 头数 |
-|------|--------|------|------|------|
-| GPT-2 Small | 124M | 12 | 768 | 12 |
-| GPT-2 Medium | 355M | 24 | 1024 | 16 |
-| GPT-2 Large | 774M | 36 | 1280 | 20 |
-| GPT-3 | 175B | 96 | 12288 | 96 |
+| 模型 | 参数量 | 层数 | 维度 | 头数 | 上下文长度 |
+|------|--------|------|------|------|-----------|
+| GPT-2 Small | 124M | 12 | 768 | 12 | 1K |
+| GPT-2 Large | 774M | 36 | 1280 | 20 | 1K |
+| GPT-3 | 175B | 96 | 12288 | 96 | 2K |
+| LLaMA 2 7B | 7B | 32 | 4096 | 32 | 4K |
+| LLaMA 3 70B | 70B | 80 | 8192 | 64 | 8K |
 
 ## 下一步 Next
 

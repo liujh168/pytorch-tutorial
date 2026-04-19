@@ -647,6 +647,107 @@ print(x.grad)  # None，因为 z 和 x 的梯度流断开了
    x.register_hook(lambda g: g * 0.1)
    ```
 
+## 练习题 Exercises
+
+**练习 1（🟢 入门）**: 用 autograd 计算函数 `f(x) = sin(x²) + cos(x)` 在 `x = π/4` 处的导数，并与解析解对比。
+
+<details>
+<summary>提示</summary>
+
+解析解：`f'(x) = 2x·cos(x²) - sin(x)`
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch, math
+
+x = torch.tensor(math.pi / 4, requires_grad=True)
+f = torch.sin(x**2) + torch.cos(x)
+f.backward()
+
+autograd_val = x.grad.item()
+analytic_val = 2 * x.item() * math.cos(x.item()**2) - math.sin(x.item())
+print(f"Autograd: {autograd_val:.6f}")
+print(f"解析解:   {analytic_val:.6f}")
+```
+
+</details>
+
+---
+
+**练习 2（🟡 进阶）**: 实现一个**梯度下降**找最小值的过程，最小化 `f(x, y) = (x-3)² + (y+2)²`，初始点 `(x₀, y₀) = (0, 0)`，学习率 0.1，迭代 100 步，验证收敛到 `(3, -2)`。
+
+<details>
+<summary>提示</summary>
+
+每步：计算 loss → backward → 用 `no_grad` 更新 → 手动清零梯度。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+x = torch.tensor(0.0, requires_grad=True)
+y = torch.tensor(0.0, requires_grad=True)
+lr = 0.1
+
+for step in range(100):
+    loss = (x - 3)**2 + (y + 2)**2
+    loss.backward()
+    with torch.no_grad():
+        x -= lr * x.grad
+        y -= lr * y.grad
+    x.grad.zero_()
+    y.grad.zero_()
+
+print(f"x={x.item():.4f} (目标: 3.0)")
+print(f"y={y.item():.4f} (目标: -2.0)")
+```
+
+</details>
+
+---
+
+**练习 3（🔴 挑战）**: 实现一个自定义 autograd 函数 `LeakyReLU`（使用 `torch.autograd.Function`），当 `x > 0` 时导数为 1，否则为 `alpha=0.01`，并与 `nn.LeakyReLU` 的结果对比。
+
+<details>
+<summary>提示</summary>
+
+继承 `torch.autograd.Function`，实现 `forward` 和 `backward` 静态方法，在 `ctx.save_for_backward` 中保存输入。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch
+
+class LeakyReLUFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, alpha=0.01):
+        ctx.save_for_backward(x)
+        ctx.alpha = alpha
+        return torch.where(x > 0, x, alpha * x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        grad = torch.where(x > 0, torch.ones_like(x), torch.full_like(x, ctx.alpha))
+        return grad_output * grad, None  # None 对应 alpha（非 Tensor）
+
+x = torch.randn(5, requires_grad=True)
+out = LeakyReLUFunction.apply(x)
+out.sum().backward()
+print("自定义梯度:", x.grad)
+```
+
+</details>
+
 ## 延伸阅读 Further Reading
 
 - [PyTorch Autograd 教程](https://pytorch.org/tutorials/beginner/blitz/autograd_tutorial.html)

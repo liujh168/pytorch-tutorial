@@ -196,13 +196,111 @@ for name, param in model.named_parameters():
     param.register_hook(gradient_hook(name))
 ```
 
+## 深入理解：混合精度训练实战（CPU 兼容版）
+
+```python
+import torch
+import torch.nn as nn
+
+def demo_mixed_precision():
+    """
+    混合精度训练原理演示
+    - float16: 速度快，范围小 (±65504)，可能溢出
+    - float32: 速度慢，范围大，用于参数存储和梯度累积
+    - GradScaler: 将 loss 放大避免 float16 下溢，更新前再缩小
+    """
+    model = nn.Sequential(
+        nn.Linear(256, 1024), nn.ReLU(),
+        nn.Linear(1024, 256), nn.ReLU(),
+        nn.Linear(256, 10),
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+
+    # 检测可用设备和精度支持
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    use_amp = device.type == 'cuda'   # AMP 在 CPU 上无意义
+    model   = model.to(device)
+
+    if use_amp:
+        scaler = torch.cuda.amp.GradScaler()
+        print("使用 CUDA AMP (float16 混合精度)")
+    else:
+        print("使用 CPU (float32 全精度)")
+
+    X = torch.randn(64, 256).to(device)
+    y = torch.randint(0, 10, (64,)).to(device)
+
+    for step in range(3):
+        optimizer.zero_grad()
+
+        if use_amp:
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                logits = model(X)
+                loss   = criterion(logits, y)
+            scaler.scale(loss).backward()
+            # 梯度裁剪（需要先 unscale）
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            logits = model(X)
+            loss   = criterion(logits, y)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+
+        print(f"Step {step}: loss={loss.item():.4f}")
+
+demo_mixed_precision()
+```
+
+## 深入理解：梯度累积与梯度裁剪组合使用
+
+```python
+import torch
+import torch.nn as nn
+
+def train_with_accumulation_and_clipping(
+    model, dataloader, optimizer,
+    accumulation_steps=4, max_grad_norm=1.0
+):
+    """
+    梯度累积 + 梯度裁剪的正确组合方式
+    注意：clip_grad_norm_ 应在 accumulation 结束后、optimizer.step() 前调用
+    """
+    criterion = nn.CrossEntropyLoss()
+    model.train()
+    optimizer.zero_grad()
+
+    for step, (X, y) in enumerate(dataloader):
+        logits = model(X)
+        # loss 除以累积步数，等效于对 batch 内样本求平均
+        loss = criterion(logits, y) / accumulation_steps
+        loss.backward()
+
+        if (step + 1) % accumulation_steps == 0:
+            # 所有 mini-batch 梯度累积完毕后再裁剪
+            total_norm = nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            optimizer.zero_grad()
+            print(f"更新步 {(step+1)//accumulation_steps}: "
+                  f"grad_norm={total_norm:.3f}, loss={loss.item()*accumulation_steps:.4f}")
+
+# 注意事项：
+# 1. loss 必须除以 accumulation_steps（否则等效 loss 偏大）
+# 2. 梯度裁剪在累积结束后（否则每个 mini-batch 都裁剪，等效于更小的裁剪阈值）
+# 3. 有效 batch_size = batch_size * accumulation_steps * num_gpus
+```
+
 ## 小结 Summary
 
 | 技术 | 作用 | 使用场景 |
 |------|------|----------|
 | 梯度裁剪 | 防止梯度爆炸 | RNN/Transformer |
 | 梯度累积 | 模拟大 batch | 显存不足时 |
-| 混合精度 | 加速训练 | GPU 训练 |
+| 混合精度 | 加速训练 | CUDA GPU 训练 |
 | 梯度检查点 | 节省显存 | 大模型训练 |
 
 ## 下一步 Next

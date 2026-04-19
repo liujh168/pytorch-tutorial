@@ -154,14 +154,123 @@ print(f"Total: {total_time:.2f}s")
 print(f"Data loading ratio: {data_time/total_time:.1%}")
 ```
 
+## 深入理解：CPU 版 Profiler 完整示例
+
+```python
+import torch
+import torch.nn as nn
+from torch.profiler import profile, record_function, ProfilerActivity
+
+# 完整可运行的 Profiler 示例（CPU/CUDA 通用）
+model  = nn.Sequential(nn.Linear(256, 1024), nn.ReLU(), nn.Linear(1024, 10))
+data   = torch.randn(32, 256)
+target = torch.randint(0, 10, (32,))
+opt    = torch.optim.Adam(model.parameters())
+crit   = nn.CrossEntropyLoss()
+
+activities = [ProfilerActivity.CPU]
+if torch.cuda.is_available():
+    activities.append(ProfilerActivity.CUDA)
+
+with profile(
+    activities=activities,
+    record_shapes=True,
+    profile_memory=True,
+    with_stack=False,    # True 会显示调用栈，但更慢
+) as prof:
+    for step in range(5):
+        with record_function("forward_pass"):
+            output = model(data)
+
+        with record_function("loss_compute"):
+            loss = crit(output, target)
+
+        with record_function("backward_pass"):
+            opt.zero_grad()
+            loss.backward()
+
+        with record_function("optimizer_step"):
+            opt.step()
+
+        prof.step()
+
+# 按 CPU 时间排序，显示前 10 项
+print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
+
+# 导出可在 Chrome 浏览器中查看的 trace（输入 chrome://tracing）
+prof.export_chrome_trace("trace.json")
+print("Chrome trace 已导出到 trace.json")
+```
+
+## 深入理解：训练中的常见问题速查
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+def diagnose_training_issues(model, dataloader, optimizer, criterion, device='cpu'):
+    """训练过程中的问题诊断助手"""
+    model.train()
+
+    for step, (X, y) in enumerate(dataloader):
+        if step >= 3: break
+        X, y = X.to(device), y.to(device)
+        optimizer.zero_grad()
+        output = model(X)
+        loss = criterion(output, y)
+        loss.backward()
+
+        # ① 检测 Loss 是否 NaN/Inf
+        if math.isnan(loss.item()) or math.isinf(loss.item()):
+            print(f"⚠️ Step {step}: loss={loss.item()} — 检查输入数据或降低学习率")
+
+        # ② 检测梯度异常
+        bad_grads = []
+        for name, param in model.named_parameters():
+            if param.grad is None: continue
+            if torch.isnan(param.grad).any():
+                bad_grads.append(f"{name}(NaN)")
+            elif param.grad.norm() > 100:
+                bad_grads.append(f"{name}(norm={param.grad.norm():.1f})")
+        if bad_grads:
+            print(f"⚠️ 梯度异常: {', '.join(bad_grads)}")
+        else:
+            total_norm = sum(p.grad.norm()**2 for p in model.parameters()
+                            if p.grad is not None) ** 0.5
+            print(f"✓ Step {step}: loss={loss.item():.4f}, grad_norm={total_norm:.3f}")
+
+        # ③ 检测权重是否更新
+        weights_before = {n: p.clone() for n, p in model.named_parameters()}
+        optimizer.step()
+        frozen_params = [n for n, p in model.named_parameters()
+                        if torch.allclose(p, weights_before[n])]
+        if frozen_params:
+            print(f"⚠️ 以下参数未更新（可能被冻结）: {frozen_params}")
+
+# 常见问题与解决方案（速查表）:
+issues = {
+    "Loss 不降":    ["学习率太小/太大", "数据标签错误", "模型容量不足"],
+    "Loss NaN":     ["学习率过大", "输入含 NaN", "log(0) 数值不稳定"],
+    "过拟合":       ["数据量不足", "模型太大", "需要正则化"],
+    "欠拟合":       ["模型太小", "学习率太小", "训练轮数不足"],
+    "GPU 显存不足": ["减小 batch_size", "梯度累积", "混合精度", "梯度检查点"],
+    "训练速度慢":   ["num_workers 不足", "数据预处理未缓存", "模型有 CPU-GPU 数据拷贝"],
+}
+print("\n常见训练问题速查:")
+for prob, solutions in issues.items():
+    print(f"  {prob}: {', '.join(solutions)}")
+```
+
 ## 小结 Summary
 
-| 工具 | 用途 |
-|------|------|
-| `torch.autograd.set_detect_anomaly` | 检测梯度异常 |
-| `torch.profiler` | 性能分析 |
-| `torch.cuda.memory_*` | 显存监控 |
-| `torchinfo.summary` | 模型结构 |
+| 工具 | 用途 | 何时使用 |
+|------|------|----------|
+| `torch.autograd.set_detect_anomaly` | 检测梯度异常 | 出现 NaN 时 |
+| `torch.profiler` | 性能分析 | 训练太慢时 |
+| `torch.cuda.memory_*` | 显存监控 | 显存 OOM 时 |
+| `record_function` | 自定义 profiler 标签 | 精确定位瓶颈 |
+| `debug_tensor()` | 张量状态检查 | 输出异常时 |
 
 ## 下一步 Next
 

@@ -162,21 +162,137 @@ def visualize_heads(attention_weights, tokens):
     # plt.show()
 ```
 
+## 深入理解：自定义实现 vs PyTorch 内置对比
+
+```python
+import torch
+import torch.nn as nn
+import math, time
+
+# 验证自定义实现与 PyTorch 内置的等价性
+torch.manual_seed(42)
+d_model, n_heads, seq_len, batch = 64, 4, 10, 2
+
+# 自定义实现（来自上面的 MultiHeadAttention）
+class MultiHeadAttentionCustom(nn.Module):
+    def __init__(self, d_model, n_heads, dropout=0.0):
+        super().__init__()
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads
+        self.W_q = nn.Linear(d_model, d_model, bias=True)
+        self.W_k = nn.Linear(d_model, d_model, bias=True)
+        self.W_v = nn.Linear(d_model, d_model, bias=True)
+        self.W_o = nn.Linear(d_model, d_model, bias=True)
+
+    def forward(self, q, k, v):
+        B = q.size(0)
+        Q = self.W_q(q).view(B, -1, self.n_heads, self.d_k).transpose(1, 2)
+        K = self.W_k(k).view(B, -1, self.n_heads, self.d_k).transpose(1, 2)
+        V = self.W_v(v).view(B, -1, self.n_heads, self.d_k).transpose(1, 2)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+        out    = torch.matmul(torch.softmax(scores, dim=-1), V)
+        out    = out.transpose(1, 2).contiguous().view(B, -1, self.n_heads * self.d_k)
+        return self.W_o(out)
+
+custom_mha  = MultiHeadAttentionCustom(d_model, n_heads)
+builtin_mha = nn.MultiheadAttention(d_model, n_heads, batch_first=True, dropout=0.0)
+
+x = torch.randn(batch, seq_len, d_model)
+out_custom  = custom_mha(x, x, x)
+out_builtin, _ = builtin_mha(x, x, x)
+
+print(f"自定义 MHA 输出 shape:  {out_custom.shape}")
+print(f"内置 MHA 输出 shape:    {out_builtin.shape}")
+print("(注意：两者权重不同，输出数值不同，但形状相同)")
+
+# 性能对比
+N_ITER = 100
+x_large = torch.randn(8, 128, d_model)
+
+start = time.perf_counter()
+for _ in range(N_ITER):
+    with torch.no_grad():
+        custom_mha(x_large, x_large, x_large)
+print(f"自定义 MHA: {(time.perf_counter()-start)*1000/N_ITER:.2f} ms/iter")
+
+start = time.perf_counter()
+for _ in range(N_ITER):
+    with torch.no_grad():
+        builtin_mha(x_large, x_large, x_large)
+print(f"内置 MHA:   {(time.perf_counter()-start)*1000/N_ITER:.2f} ms/iter")
+print("(内置实现经过 CUDA kernel 优化，生产环境优先使用)")
+```
+
+## 深入理解：Cross-Attention（编码器-解码器注意力）
+
+```python
+import torch
+import torch.nn as nn
+
+# Cross-Attention: Q 来自 decoder，K/V 来自 encoder
+# 用于 Seq2Seq 任务（机器翻译、摘要、语音识别）
+
+class CrossAttention(nn.Module):
+    def __init__(self, d_model, n_heads):
+        super().__init__()
+        # Q 投影：作用于 decoder 状态
+        # K/V 投影：作用于 encoder 输出
+        self.attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
+
+    def forward(self, decoder_hidden, encoder_output, memory_key_padding_mask=None):
+        """
+        decoder_hidden:          (batch, tgt_len, d_model) — 解码器的当前状态
+        encoder_output:          (batch, src_len, d_model) — 编码器的全部输出
+        memory_key_padding_mask: (batch, src_len)          — True 表示 padding
+        """
+        # Q = decoder_hidden, K = V = encoder_output
+        out, attn_weights = self.attn(
+            query=decoder_hidden,
+            key=encoder_output,
+            value=encoder_output,
+            key_padding_mask=memory_key_padding_mask,
+        )
+        return out, attn_weights
+
+
+# 演示：英译中场景
+d_model, n_heads = 128, 4
+cross_attn = CrossAttention(d_model, n_heads)
+
+src_len, tgt_len = 20, 15   # 源语言 20 个词，目标语言 15 个词
+encoder_out    = torch.randn(2, src_len, d_model)   # 编码器输出
+decoder_hidden = torch.randn(2, tgt_len, d_model)   # 解码器当前状态
+
+# 最后 3 个源词是 padding
+pad_mask = torch.zeros(2, src_len, dtype=torch.bool)
+pad_mask[:, -3:] = True
+
+out, weights = cross_attn(decoder_hidden, encoder_out, memory_key_padding_mask=pad_mask)
+print(f"Cross-Attention 输出 shape:  {out.shape}")       # (2, 15, 128)
+print(f"注意力权重 shape:            {weights.shape}")   # (2, 15, 20)
+print("(每个目标词对 20 个源词的注意力分布)")
+```
+
 ## 小结 Summary
 
 ```python
 # Multi-Head Attention 核心步骤：
-# 1. 投影到 Q, K, V
-# 2. 分割成 n_heads 个头
-# 3. 每个头独立计算注意力
-# 4. 合并所有头
-# 5. 输出投影
+# 1. 投影到 Q, K, V（各 n_heads 个子空间）
+# 2. 每个头独立计算 Scaled Dot-Product Attention
+# 3. 合并所有头的输出
+# 4. 输出投影
 
-# 优势：
-# - 并行计算效率高
-# - 捕获多种依赖关系
-# - 参数量与单头相同
+# 三种使用模式:
+# Self-Attention:  Q=K=V=x               (Encoder)
+# Causal-Self:     Q=K=V=x + 因果掩码    (Decoder 自注意力)
+# Cross-Attention: Q=decoder, K=V=encoder (Decoder 交叉注意力)
 ```
+
+| 变体 | Q 来源 | K/V 来源 | 掩码 | 典型位置 |
+|------|--------|---------|------|----------|
+| Self-Attention | 自身 | 自身 | 无（或 padding） | Encoder |
+| Causal Self-Attn | 自身 | 自身 | 因果掩码 | Decoder 第1层 |
+| Cross-Attention | Decoder | Encoder | padding | Decoder 第2层 |
 
 ## 下一步 Next
 

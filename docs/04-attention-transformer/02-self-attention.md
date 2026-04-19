@@ -210,6 +210,90 @@ output_causal = pytorch_attention(Q, K, V, is_causal=True)
 4. 可解释性：注意力权重提供了一种解释模型关注的方式
 ```
 
+## 练习题 Exercises
+
+**练习 1（🟢 入门）**: 实现一个函数，接受注意力权重矩阵（shape `(seq, seq)`），用 `matplotlib` 绘制热力图，横/纵轴标注 token 文本（如 `["The", "cat", "sat"]`）。
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch, matplotlib.pyplot as plt
+
+def plot_attention(weights: torch.Tensor, tokens: list):
+    """weights: (seq, seq) 注意力权重"""
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(weights.detach().cpu().numpy(), cmap='Blues', vmin=0, vmax=1)
+    ax.set_xticks(range(len(tokens))); ax.set_xticklabels(tokens, rotation=45)
+    ax.set_yticks(range(len(tokens))); ax.set_yticklabels(tokens)
+    plt.colorbar(im)
+    plt.title('Attention Weights')
+    plt.tight_layout()
+    plt.show()
+```
+
+</details>
+
+---
+
+**练习 2（🟡 进阶）**: 在 `scaled_dot_product_attention` 的基础上，添加 **Dropout** 支持（在 softmax 之后对注意力权重进行 dropout），并解释为什么 dropout 要在 softmax 之后、矩阵乘 V 之前施加。
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch, torch.nn.functional as F, math
+
+def attention_with_dropout(Q, K, V, dropout_p=0.1, training=True, mask=None):
+    d_k    = Q.size(-1)
+    scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+    if mask is not None:
+        scores = scores.masked_fill(mask == 0, float('-inf'))
+    attn = F.softmax(scores, dim=-1)
+    # Dropout 在 softmax 后：随机丢弃某些 token 的注意力，迫使模型不过度依赖单一位置
+    if training and dropout_p > 0:
+        attn = F.dropout(attn, p=dropout_p)
+    return torch.matmul(attn, V), attn
+```
+
+</details>
+
+---
+
+**练习 3（🔴 挑战）**: 实现 **相对位置编码的注意力**：注意力分数加上可学习的相对位置偏置 `bias[i-j]`，参数量应为 `(2*seq_len-1,)`。
+
+<details>
+<summary>提示</summary>
+
+创建 shape `(2*max_len-1,)` 的可学习参数，用 `i-j+seq_len-1` 作为索引取出每对位置的偏置。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch, torch.nn as nn, math
+
+class RelativeAttention(nn.Module):
+    def __init__(self, d_k: int, max_len: int = 64):
+        super().__init__()
+        self.d_k     = d_k
+        self.max_len = max_len
+        self.rel_bias = nn.Parameter(torch.zeros(2 * max_len - 1))
+
+    def forward(self, Q, K, V):
+        S = Q.size(-2)
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+        i = torch.arange(S, device=Q.device).unsqueeze(1)
+        j = torch.arange(S, device=Q.device).unsqueeze(0)
+        idx = i - j + self.max_len - 1
+        scores = scores + self.rel_bias[idx]
+        return torch.matmul(F.softmax(scores, dim=-1), V)
+```
+
+</details>
+
 ## 小结 Summary
 
 ```python

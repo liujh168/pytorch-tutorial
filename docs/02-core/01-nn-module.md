@@ -600,6 +600,89 @@ class CorrectModule(nn.Module):
    param.requires_grad = False  # 冻结
    ```
 
+## 练习题 Exercises
+
+**练习 1（🟢 入门）**: 创建一个 `ResidualBlock`，输入维度等于输出维度，前向传播为 `output = F.relu(linear(x)) + x`（残差连接），验证 shape 不变。
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch, torch.nn as nn, torch.nn.functional as F
+
+class ResidualBlock(nn.Module):
+    def __init__(self, dim: int):
+        super().__init__()
+        self.linear = nn.Linear(dim, dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.relu(self.linear(x)) + x  # 残差连接
+
+block = ResidualBlock(64)
+x = torch.randn(4, 64)
+print(block(x).shape)  # torch.Size([4, 64])
+```
+
+</details>
+
+---
+
+**练习 2（🟡 进阶）**: 实现一个带 **共享权重** 的模型：定义一个 `nn.Linear(8, 8)` 层，在 `forward` 中使用该层两次（`x = layer(x); x = layer(x)`）。统计参数量，验证确实只有一份权重。
+
+<details>
+<summary>提示</summary>
+
+直接在 `__init__` 中定义一个层，在 `forward` 里调用两次即可。`sum(p.numel() for p in model.parameters())` 应等于单层参数量。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+class SharedWeightModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.shared = nn.Linear(8, 8)   # 只定义一次
+
+    def forward(self, x):
+        x = torch.relu(self.shared(x))
+        x = torch.relu(self.shared(x))  # 第二次复用同一层
+        return x
+
+model = SharedWeightModel()
+print("参数量:", sum(p.numel() for p in model.parameters()))  # 8*8+8 = 72
+```
+
+</details>
+
+---
+
+**练习 3（🔴 挑战）**: 实现一个 `EnsembleModel`，包含 N 个子模型，`forward` 输出各子模型 logits 的**平均值**。支持在初始化时传入模型列表，并确保所有子模型被正确注册（用 `nn.ModuleList`，而非普通 Python list）。解释为什么不能用普通 list。
+
+<details>
+<summary>参考答案</summary>
+
+```python
+class EnsembleModel(nn.Module):
+    def __init__(self, models):
+        super().__init__()
+        # ModuleList 会注册所有子模型；普通 list 不会，导致参数无法被 optimizer 管理
+        self.models = nn.ModuleList(models)
+
+    def forward(self, x):
+        outputs = torch.stack([m(x) for m in self.models], dim=0)
+        return outputs.mean(dim=0)
+
+models = [nn.Linear(4, 2) for _ in range(3)]
+ensemble = EnsembleModel(models)
+x = torch.randn(5, 4)
+print(ensemble(x).shape)  # (5, 2)
+print("参数量:", sum(p.numel() for p in ensemble.parameters()))  # 3 * (4*2+2) = 30
+```
+
+</details>
+
 ## 延伸阅读 Further Reading
 
 - [nn.Module 源码](https://github.com/pytorch/pytorch/blob/main/torch/nn/modules/module.py)

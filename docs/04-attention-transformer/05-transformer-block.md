@@ -172,6 +172,143 @@ def init_transformer_weights(module, init_std=0.02):
 encoder.apply(lambda m: init_transformer_weights(m, init_std=0.02))
 ```
 
+## 深入理解：Pre-LN vs Post-LN 训练稳定性对比
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# Pre-LN（现代 GPT 风格）vs Post-LN（原始 Transformer）
+# Pre-LN 训练更稳定，原因：梯度可以通过残差路径绕过 LayerNorm 直接传播
+
+class TransformerBlockPostLN(nn.Module):
+    """Post-LN: 原始 Transformer 结构"""
+    def __init__(self, d_model, n_heads, d_ff, dropout=0.1):
+        super().__init__()
+        self.attn  = nn.MultiheadAttention(d_model, n_heads, batch_first=True, dropout=dropout)
+        self.ff    = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model))
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.drop  = nn.Dropout(dropout)
+
+    def forward(self, x, mask=None):
+        # Attention → Residual → Norm
+        attn_out, _ = self.attn(x, x, x, attn_mask=mask)
+        x = self.norm1(x + self.drop(attn_out))
+        # FFN → Residual → Norm
+        x = self.norm2(x + self.drop(self.ff(x)))
+        return x
+
+
+class TransformerBlockPreLN(nn.Module):
+    """Pre-LN: GPT-2 / GPT-3 风格（推荐）"""
+    def __init__(self, d_model, n_heads, d_ff, dropout=0.1):
+        super().__init__()
+        self.attn  = nn.MultiheadAttention(d_model, n_heads, batch_first=True, dropout=dropout)
+        self.ff    = nn.Sequential(nn.Linear(d_model, d_ff), nn.GELU(), nn.Linear(d_ff, d_model))
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.drop  = nn.Dropout(dropout)
+
+    def forward(self, x, mask=None):
+        # Norm → Attention → Residual
+        normed = self.norm1(x)
+        attn_out, _ = self.attn(normed, normed, normed, attn_mask=mask)
+        x = x + self.drop(attn_out)
+        # Norm → FFN → Residual
+        x = x + self.drop(self.ff(self.norm2(x)))
+        return x
+
+
+# 比较两种架构的梯度范数（Pre-LN 梯度更稳定）
+d_model, n_heads, d_ff = 64, 4, 256
+x = torch.randn(4, 20, d_model, requires_grad=False)
+y_target = torch.randn(4, 20, d_model)
+
+for name, block in [('Post-LN', TransformerBlockPostLN(d_model, n_heads, d_ff)),
+                    ('Pre-LN',  TransformerBlockPreLN(d_model, n_heads, d_ff))]:
+    x_in = x.clone().detach().requires_grad_(True)
+    out  = block(x_in)
+    loss = F.mse_loss(out, y_target)
+    loss.backward()
+    grad_norm = x_in.grad.norm().item()
+    print(f"{name}: 输入梯度范数 = {grad_norm:.4f}")
+```
+
+## 深入理解：完整的 GPT 风格解码器
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+class GPTDecoderBlock(nn.Module):
+    """GPT 风格解码器块（仅 Self-Attention，使用因果掩码）"""
+    def __init__(self, d_model, n_heads, d_ff, dropout=0.1):
+        super().__init__()
+        self.attn  = nn.MultiheadAttention(d_model, n_heads, batch_first=True, dropout=dropout)
+        self.ff    = nn.Sequential(
+            nn.Linear(d_model, d_ff), nn.GELU(), nn.Dropout(dropout),
+            nn.Linear(d_ff, d_model), nn.Dropout(dropout),
+        )
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+
+    def forward(self, x):
+        S = x.size(1)
+        # 因果掩码：当前位置只能看到之前的位置
+        causal_mask = torch.triu(torch.ones(S, S, device=x.device), diagonal=1).bool()
+        normed = self.norm1(x)
+        attn_out, _ = self.attn(normed, normed, normed, attn_mask=causal_mask)
+        x = x + attn_out
+        x = x + self.ff(self.norm2(x))
+        return x
+
+
+class MiniGPT(nn.Module):
+    """极简 GPT 实现"""
+    def __init__(self, vocab_size, d_model=128, n_heads=4, n_layers=4,
+                 d_ff=512, max_len=256, dropout=0.1):
+        super().__init__()
+        self.token_emb = nn.Embedding(vocab_size, d_model)
+        self.pos_emb   = nn.Embedding(max_len, d_model)
+        self.blocks    = nn.ModuleList([
+            GPTDecoderBlock(d_model, n_heads, d_ff, dropout)
+            for _ in range(n_layers)
+        ])
+        self.norm = nn.LayerNorm(d_model)
+        self.head = nn.Linear(d_model, vocab_size, bias=False)
+        # 权重绑定：输出层与嵌入层共享权重（常见优化）
+        self.head.weight = self.token_emb.weight
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, (nn.Linear, nn.Embedding)):
+            nn.init.normal_(m.weight, std=0.02)
+        if isinstance(m, nn.Linear) and m.bias is not None:
+            nn.init.zeros_(m.bias)
+
+    def forward(self, tokens):  # tokens: (B, S)
+        B, S = tokens.shape
+        pos  = torch.arange(S, device=tokens.device).unsqueeze(0)
+        x    = self.token_emb(tokens) + self.pos_emb(pos)
+        for block in self.blocks:
+            x = block(x)
+        return self.head(self.norm(x))  # (B, S, vocab_size)
+
+
+# 测试
+VOCAB, MAX_LEN = 5000, 64
+gpt = MiniGPT(vocab_size=VOCAB, max_len=MAX_LEN)
+tokens = torch.randint(0, VOCAB, (2, 32))
+logits = gpt(tokens)
+print(f"输入 tokens: {tokens.shape}")
+print(f"输出 logits: {logits.shape}  (B, S, vocab_size)")
+print(f"参数量: {sum(p.numel() for p in gpt.parameters()):,}")
+```
+
 ## 架构变体
 
 | 变体 | 特点 | 使用模型 |
@@ -179,7 +316,8 @@ encoder.apply(lambda m: init_transformer_weights(m, init_std=0.02))
 | Post-LN | 原始架构，训练较难 | 原始 Transformer |
 | Pre-LN | 训练更稳定 | GPT-2, GPT-3 |
 | Sandwich-LN | 结合两者优点 | 一些变体 |
-| RMSNorm | 计算更高效 | LLaMA |
+| RMSNorm | 计算更高效，无减法归一化 | LLaMA, Mistral |
+| SwiGLU FFN | 替换 GELU，性能更好 | LLaMA 2/3 |
 
 ## 下一步 Next
 

@@ -743,6 +743,92 @@ class MemoryEfficientModel(nn.Module):
    - 混合精度：加速训练
    - 分布式训练：多 GPU
 
+## 练习题 Exercises
+
+**练习 1（🟢 入门）**: 修改训练循环，每 5 个 epoch 在终端打印一次当前学习率（从 optimizer 中读取）。
+
+<details>
+<summary>提示</summary>
+
+`optimizer.param_groups[0]['lr']` 可以获取当前学习率。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+for epoch in range(1, 51):
+    # ... 训练代码 ...
+    if epoch % 5 == 0:
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch {epoch}: lr = {current_lr:.6f}")
+```
+
+</details>
+
+---
+
+**练习 2（🟡 进阶）**: 实现 **梯度累积**（Gradient Accumulation），将原本 `batch_size=256` 的效果用 8 个 `batch_size=32` 的 mini-batch 来模拟，注意 loss 需要除以累积步数。
+
+<details>
+<summary>提示</summary>
+
+每 `accumulation_steps` 步才调用一次 `optimizer.step()` 和 `optimizer.zero_grad()`，loss 要除以 `accumulation_steps` 后再 backward。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+accumulation_steps = 8
+optimizer.zero_grad()
+
+for step, (X, y) in enumerate(train_loader):
+    X, y = X.to(device), y.to(device)
+    logits = model(X)
+    loss   = criterion(logits, y) / accumulation_steps  # 缩放 loss
+    loss.backward()
+
+    if (step + 1) % accumulation_steps == 0:
+        optimizer.step()
+        optimizer.zero_grad()
+```
+
+</details>
+
+---
+
+**练习 3（🔴 挑战）**: 实现一个完整的 **Checkpoint 恢复** 机制：训练到第 epoch 时保存 `{'epoch', 'model_state', 'optimizer_state', 'best_val_acc'}` 到磁盘；支持从任意 checkpoint 恢复训练，恢复后准确率应与中断前一致。
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch, os
+
+def save_checkpoint(model, optimizer, epoch, val_acc, path):
+    torch.save({
+        'epoch':          epoch,
+        'model_state':    model.state_dict(),
+        'optimizer_state': optimizer.state_dict(),
+        'best_val_acc':   val_acc,
+    }, path)
+
+def load_checkpoint(path, model, optimizer):
+    ckpt = torch.load(path, map_location='cpu')
+    model.load_state_dict(ckpt['model_state'])
+    optimizer.load_state_dict(ckpt['optimizer_state'])
+    return ckpt['epoch'], ckpt['best_val_acc']
+
+# 使用示例
+# save_checkpoint(model, optimizer, epoch=10, val_acc=0.95, path='ckpt.pth')
+# start_epoch, best_acc = load_checkpoint('ckpt.pth', model, optimizer)
+```
+
+</details>
+
 ## 延伸阅读 Further Reading
 
 - [PyTorch 训练技巧](https://pytorch.org/tutorials/recipes/recipes/tuning_guide.html)

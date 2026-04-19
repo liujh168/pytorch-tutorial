@@ -683,6 +683,85 @@ print(f"Padded:\n{padded}")
    x.sum(dim=0)       # 聚合
    ```
 
+## 练习题 Exercises
+
+**练习 1（🟢 入门）**: 创建一个 shape 为 `(4, 5)` 的随机矩阵，找出每一行的最大值及其索引。
+
+<details>
+<summary>提示</summary>
+
+使用 `torch.max(x, dim=1)` 或 `x.max(dim=1)`，它会同时返回值和索引。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+import torch
+x = torch.rand(4, 5)
+values, indices = x.max(dim=1)
+print("每行最大值:", values)
+print("对应列索引:", indices)
+```
+
+</details>
+
+---
+
+**练习 2（🟡 进阶）**: 不使用循环，利用广播机制计算矩阵 A（shape `(3, 1)`）与矩阵 B（shape `(1, 4)`）的外积，结果 shape 应为 `(3, 4)`。
+
+<details>
+<summary>提示</summary>
+
+直接相乘：`A * B`，PyTorch 会自动广播。也可以用 `torch.outer(a, b)` 处理一维向量。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+A = torch.tensor([[1.0], [2.0], [3.0]])   # (3, 1)
+B = torch.tensor([[4.0, 5.0, 6.0, 7.0]]) # (1, 4)
+result = A * B  # 广播为 (3, 4)
+print(result)
+# 等价写法:
+# result = torch.outer(A.squeeze(), B.squeeze())
+```
+
+</details>
+
+---
+
+**练习 3（🔴 挑战）**: 实现一个函数 `cosine_similarity(a, b)`，计算两个二维张量（每行是一个向量）之间的余弦相似度矩阵，**不允许使用 `torch.nn.functional.cosine_similarity`**。
+
+<details>
+<summary>提示</summary>
+
+余弦相似度 = (a · b) / (||a|| × ||b||)。先对每个向量 L2 归一化，然后做矩阵乘法。
+
+</details>
+
+<details>
+<summary>参考答案</summary>
+
+```python
+def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    # a: (m, d), b: (n, d) → 返回 (m, n)
+    a_norm = a / a.norm(dim=1, keepdim=True).clamp(min=1e-8)
+    b_norm = b / b.norm(dim=1, keepdim=True).clamp(min=1e-8)
+    return a_norm @ b_norm.T
+
+a = torch.randn(3, 8)
+b = torch.randn(5, 8)
+sim = cosine_similarity(a, b)
+print("相似度矩阵 shape:", sim.shape)  # (3, 5)
+print("值域 [-1, 1]:", sim.min().item(), "~", sim.max().item())
+```
+
+</details>
+
 ## 延伸阅读 Further Reading
 
 - [PyTorch Tensor 官方文档](https://pytorch.org/docs/stable/tensors.html)

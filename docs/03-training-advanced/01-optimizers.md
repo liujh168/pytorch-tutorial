@@ -357,6 +357,100 @@ def find_lr(model, train_loader, optimizer, criterion, init_lr=1e-7, final_lr=10
     return lrs, losses
 ```
 
+## 深入理解：Adam vs AdamW 差异实验
+
+```python
+import torch
+import torch.nn as nn
+
+# 理解 Adam 与 AdamW 的本质区别
+# Adam:  θ = θ - lr * m̂ / (√v̂ + ε) - lr * λ * θ / (√v̂ + ε)  ← L2 正则化（自适应）
+# AdamW: θ = θ - lr * m̂ / (√v̂ + ε) - lr * λ * θ             ← 权重衰减（固定比例）
+
+def compare_adam_adamw(steps=500):
+    """对比 Adam 和 AdamW 的权重衰减行为"""
+    # 创建两个相同初始权重的模型
+    torch.manual_seed(42)
+    model_adam  = nn.Linear(20, 2)
+    model_adamw = nn.Linear(20, 2)
+    # 让两个模型权重完全相同
+    model_adamw.load_state_dict(model_adam.state_dict())
+
+    opt_adam  = torch.optim.Adam( model_adam.parameters(),  lr=1e-3, weight_decay=0.1)
+    opt_adamw = torch.optim.AdamW(model_adamw.parameters(), lr=1e-3, weight_decay=0.1)
+
+    X = torch.randn(64, 20)
+    y = torch.randint(0, 2, (64,))
+    criterion = nn.CrossEntropyLoss()
+
+    for _ in range(steps):
+        for model, opt in [(model_adam, opt_adam), (model_adamw, opt_adamw)]:
+            opt.zero_grad()
+            criterion(model(X), y).backward()
+            opt.step()
+
+    # 衡量权重大小（AdamW 的权重应更小，正则化更强）
+    norm_adam  = sum(p.norm().item() for p in model_adam.parameters())
+    norm_adamw = sum(p.norm().item() for p in model_adamw.parameters())
+    print(f"Adam  权重范数: {norm_adam:.4f}")
+    print(f"AdamW 权重范数: {norm_adamw:.4f}  ← AdamW 正则化效果更强")
+
+compare_adam_adamw()
+
+# 结论：在 Transformer 训练中始终优先选择 AdamW
+# 因为 Adam 的 weight_decay 被自适应学习率缩放，
+# 导致大梯度参数的正则化强度实际上被降低了
+```
+
+## 深入理解：梯度裁剪最佳实践
+
+```python
+import torch
+import torch.nn as nn
+
+def demonstrate_gradient_clipping():
+    """演示梯度裁剪对训练稳定性的影响"""
+    model = nn.Sequential(
+        nn.Linear(10, 64), nn.Tanh(),   # Tanh 容易梯度爆炸
+        nn.Linear(64, 64), nn.Tanh(),
+        nn.Linear(64, 1)
+    )
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+    X = torch.randn(32, 10)
+    y = torch.randn(32, 1)
+
+    for step in range(5):
+        optimizer.zero_grad()
+        loss = nn.MSELoss()(model(X), y)
+        loss.backward()
+
+        # 计算裁剪前的梯度范数
+        total_norm = sum(
+            p.grad.norm().item() ** 2
+            for p in model.parameters() if p.grad is not None
+        ) ** 0.5
+
+        # 裁剪（max_norm=1.0 是大多数场景的安全值）
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+        after_norm = sum(
+            p.grad.norm().item() ** 2
+            for p in model.parameters() if p.grad is not None
+        ) ** 0.5
+
+        optimizer.step()
+        print(f"Step {step}: loss={loss.item():.4f}  "
+              f"grad_norm {total_norm:.2f} → {after_norm:.2f}")
+
+demonstrate_gradient_clipping()
+
+# 经验法则：
+# - Transformer / LSTM: max_norm=1.0
+# - 一般 CNN/MLP: max_norm=5.0
+# - 如果经常裁剪，说明学习率可能偏大
+```
+
 ## 小结 Summary
 
 | 优化器 | 适用场景 | 典型学习率 |

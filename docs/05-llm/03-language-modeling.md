@@ -140,6 +140,137 @@ def calculate_perplexity(model, dataloader, device='cuda'):
 # - 非常好的模型: < 10
 ```
 
+## 深入理解：字符级语言模型完整训练示例
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+# 字符级语言模型（不依赖外部数据集，开箱即用）
+TEXT = """
+深度学习是机器学习的一个分支，它基于人工神经网络进行学习。
+深度学习模型能够自动从数据中学习特征表示。
+PyTorch 是一个灵活的深度学习框架，广泛用于研究和工业界。
+Transformer 架构改变了自然语言处理的面貌。
+GPT 系列模型展示了大语言模型的强大能力。
+""" * 20   # 重复以增加数据量
+
+# 构建字符词汇表
+chars   = sorted(set(TEXT))
+stoi    = {c: i for i, c in enumerate(chars)}
+itos    = {i: c for i, c in enumerate(chars)}
+VOCAB   = len(chars)
+print(f"词汇表大小: {VOCAB} 个字符")
+
+# 编码
+data = torch.tensor([stoi[c] for c in TEXT], dtype=torch.long)
+
+# 数据集
+SEQ_LEN  = 32
+BATCH    = 16
+DEVICE   = torch.device('cpu')
+
+def get_batch(data, seq_len, batch_size):
+    idx = torch.randint(len(data) - seq_len - 1, (batch_size,))
+    x   = torch.stack([data[i:i+seq_len]   for i in idx])
+    y   = torch.stack([data[i+1:i+seq_len+1] for i in idx])
+    return x.to(DEVICE), y.to(DEVICE)
+
+
+# 极简 Transformer 语言模型
+class TinyLM(nn.Module):
+    def __init__(self, vocab_size, d_model=64, n_heads=4, n_layers=2, max_len=64):
+        super().__init__()
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
+        self.pos_emb = nn.Embedding(max_len, d_model)
+        self.blocks  = nn.ModuleList([
+            nn.TransformerEncoderLayer(d_model, n_heads, d_model*4, dropout=0.1, batch_first=True)
+            for _ in range(n_layers)
+        ])
+        self.norm    = nn.LayerNorm(d_model)
+        self.head    = nn.Linear(d_model, vocab_size, bias=False)
+        self.head.weight = self.tok_emb.weight  # 权重绑定
+
+    def forward(self, x):
+        B, S = x.shape
+        pos  = torch.arange(S, device=x.device).unsqueeze(0)
+        h    = self.tok_emb(x) + self.pos_emb(pos)
+        # 因果掩码
+        causal_mask = torch.triu(torch.ones(S, S, device=x.device), diagonal=1).bool()
+        for block in self.blocks:
+            h = block(h, src_mask=causal_mask)
+        return self.head(self.norm(h))
+
+
+model     = TinyLM(VOCAB).to(DEVICE)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-3, weight_decay=0.01)
+params    = sum(p.numel() for p in model.parameters())
+print(f"模型参数量: {params:,}")
+
+# 训练
+print("\n开始训练...")
+for step in range(500):
+    xb, yb = get_batch(data, SEQ_LEN, BATCH)
+    model.train()
+    logits = model(xb)
+    loss   = F.cross_entropy(logits.view(-1, VOCAB), yb.view(-1))
+    optimizer.zero_grad()
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    optimizer.step()
+
+    if step % 100 == 0:
+        ppl = math.exp(loss.item())
+        print(f"Step {step:4d}: loss={loss.item():.4f}, perplexity={ppl:.2f}")
+
+# 文本生成
+def generate(model, start_text: str, n_chars: int = 50, temperature: float = 0.8):
+    model.eval()
+    context = torch.tensor([stoi.get(c, 0) for c in start_text], dtype=torch.long).unsqueeze(0)
+    result  = start_text
+    with torch.no_grad():
+        for _ in range(n_chars):
+            logits = model(context[:, -SEQ_LEN:])
+            probs  = F.softmax(logits[0, -1] / temperature, dim=-1)
+            next_id = torch.multinomial(probs, 1).item()
+            result  += itos[next_id]
+            context  = torch.cat([context, torch.tensor([[next_id]])], dim=1)
+    return result
+
+print(f"\n生成文本:\n{generate(model, '深度学习', n_chars=60)}")
+```
+
+## 深入理解：困惑度的直觉理解
+
+```python
+import torch, math
+
+# 困惑度 = 2^(平均每个 token 的比特数) = exp(平均 NLL loss)
+# 直觉：模型平均在多少个候选中"困惑"地选择
+# - PPL=2:     模型非常确定，只在2个选项中选
+# - PPL=100:   模型相当困惑，相当于在100个等概率选项中随机选
+# - PPL=词汇量: 等同于完全随机模型（最差情况）
+
+def loss_to_ppl(loss_value: float) -> float:
+    return math.exp(loss_value)
+
+# 不同 loss 对应的困惑度
+print("Loss  →  Perplexity  →  含义")
+print("-" * 50)
+for loss in [0.1, 0.5, 1.0, 2.0, 3.0, 4.6, 10.0]:
+    ppl = loss_to_ppl(loss)
+    if ppl < 5:      meaning = "极好（接近完美）"
+    elif ppl < 20:   meaning = "很好"
+    elif ppl < 100:  meaning = "一般"
+    elif ppl < 1000: meaning = "较差"
+    else:            meaning = "接近随机"
+    print(f"{loss:5.1f}  →  {ppl:10.1f}  →  {meaning}")
+
+print(f"\n随机模型基线 (vocab=32000): PPL={32000}")
+```
+
 ## 下一步 Next
 
 [下一章：GPT 架构详解 →](./04-gpt-architecture.md)

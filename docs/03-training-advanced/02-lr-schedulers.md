@@ -179,15 +179,105 @@ plt.title('Learning Rate Schedulers Comparison')
 # plt.show()
 ```
 
+## 深入理解：完整的 Warmup + Cosine 训练示例
+
+```python
+import torch
+import torch.nn as nn
+from torch.optim.lr_scheduler import LambdaLR
+import math
+
+def get_warmup_cosine_scheduler(optimizer, warmup_epochs, total_epochs):
+    """Transformer 标准调度: 线性预热 + 余弦衰减"""
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return epoch / warmup_epochs           # 线性从 0 升到 1
+        progress = (epoch - warmup_epochs) / (total_epochs - warmup_epochs)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))   # 余弦衰减到 0
+
+    return LambdaLR(optimizer, lr_lambda)
+
+
+# 演示：观察学习率曲线
+model     = nn.Linear(10, 5)
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+scheduler = get_warmup_cosine_scheduler(optimizer, warmup_epochs=5, total_epochs=50)
+
+print(f"{'Epoch':>6} {'LR':>12}")
+for epoch in range(50):
+    lr = optimizer.param_groups[0]['lr']
+    if epoch in [0, 1, 4, 5, 10, 25, 49]:
+        print(f"{epoch:6d} {lr:12.6f}")
+    scheduler.step()
+```
+
+## 深入理解：调度器常见错误
+
+```python
+import torch
+import torch.nn as nn
+
+# ❌ 错误用法：在 optimizer.step() 之前调用 scheduler.step()
+# (PyTorch < 1.4 的遗留问题，会产生警告)
+model = nn.Linear(10, 5)
+opt   = torch.optim.Adam(model.parameters(), lr=0.001)
+sched = torch.optim.lr_scheduler.StepLR(opt, step_size=10)
+
+# ✅ 正确顺序
+for epoch in range(30):
+    # 1. 前向传播
+    loss = nn.MSELoss()(model(torch.randn(8, 10)), torch.randn(8, 5))
+    # 2. 反向传播
+    opt.zero_grad()
+    loss.backward()
+    # 3. 更新参数
+    opt.step()
+    # 4. 更新学习率（在 optimizer.step() 之后）
+    sched.step()
+
+# ❌ 错误：OneCycleLR 应每 batch 调用，不是每 epoch
+# ✅ 正确：OneCycleLR 在每个 batch 的 optimizer.step() 后调用 scheduler.step()
+
+# 判断哪些调度器应该 per-batch vs per-epoch:
+# per-epoch:  StepLR, CosineAnnealingLR, ReduceLROnPlateau, ExponentialLR
+# per-batch:  OneCycleLR, CyclicLR
+```
+
+## 深入理解：ReduceLROnPlateau 最佳实践
+
+```python
+import torch
+import torch.nn as nn
+
+model     = nn.Linear(10, 5)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+# ReduceLROnPlateau 是唯一需要传入指标值的调度器
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode='min',       # 监控验证 loss（min）；监控准确率用 'max'
+    factor=0.5,       # 学习率 × 0.5
+    patience=5,       # 连续 5 个 epoch 无改善才降低
+    min_lr=1e-6,      # 最小学习率下限
+    verbose=True,     # 打印学习率变化信息
+)
+
+# 在验证 loss 不降时自动降低学习率
+val_losses = [0.5, 0.48, 0.47, 0.47, 0.47, 0.47, 0.47, 0.47]
+for epoch, val_loss in enumerate(val_losses):
+    scheduler.step(val_loss)  # 传入验证指标，而不是直接 step()
+    print(f"Epoch {epoch}: val_loss={val_loss}, lr={optimizer.param_groups[0]['lr']:.6f}")
+```
+
 ## 小结 Summary
 
-| 调度器 | 适用场景 | 特点 |
-|--------|----------|------|
-| StepLR | 简单基线 | 阶梯下降 |
-| CosineAnnealingLR | CV/NLP | 平滑变化 |
-| OneCycleLR | 快速训练 | 学习率先升后降 |
-| ReduceLROnPlateau | 自适应 | 根据指标调整 |
-| Warmup + Cosine | Transformer | 防止初期震荡 |
+| 调度器 | 适用场景 | 特点 | 调用时机 |
+|--------|----------|------|----------|
+| StepLR | 简单基线 | 阶梯下降 | per-epoch |
+| CosineAnnealingLR | CV/NLP | 平滑变化 | per-epoch |
+| OneCycleLR | 快速训练 | 学习率先升后降 | per-batch |
+| ReduceLROnPlateau | 自适应 | 根据指标调整 | per-epoch（传指标） |
+| Warmup + Cosine | Transformer | 防止初期震荡 | per-epoch |
 
 ## 下一步 Next
 
