@@ -1,0 +1,23 @@
+# PyTorch 核心
+torch>=2.0
+torchvision
+torchaudio
+
+# Transformer 和 LLM
+transformers
+datasets
+tokenizers
+
+# 数据处理和可视化
+numpy
+pandas
+matplotlib
+scikit-learn
+
+# 训练工具
+tqdm
+tensorboard
+
+# 开发环境
+jupyter
+ipykernel
