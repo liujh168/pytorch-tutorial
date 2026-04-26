@@ -70,3 +70,13 @@ datasets/
 
 # Jupyter
 profile_default/
+
+# 生成的模型目录
+finetuned_model/
+lora_finetuned_model/
+p_tuning_finetuned_model/
+policy_model/
+
+# 其他临时文件
+results/
+logs/
