@@ -156,4 +156,4 @@ clf = TextClassifier(VOCAB, num_classes=5).to(device)
 logits = clf(tokens)
 print(f"分类 logits shape: {logits.shape}  (batch=4, classes=5)")
 
-print("\n✓ 示例 08 运行完成")
+print("\n示例 08 运行完成")

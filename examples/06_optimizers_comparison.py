@@ -114,4 +114,4 @@ plt.tight_layout()
 plt.savefig("examples/optimizers_comparison.png", dpi=120)
 print("\n  loss 曲线已保存到 examples/optimizers_comparison.png")
 
-print("\n✓ 示例 06 运行完成")
+print("\n示例 06 运行完成")

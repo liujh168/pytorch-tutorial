@@ -123,4 +123,4 @@ for epoch in range(1, 51):
 early_stop.restore_best(model)
 _, final_acc = eval_epoch(model, val_loader, criterion)
 print(f"\n最终验证准确率: {final_acc:.3f}")
-print("\n✓ 示例 05 运行完成")
+print("\n示例 05 运行完成")

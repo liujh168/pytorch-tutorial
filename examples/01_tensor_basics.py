@@ -92,4 +92,4 @@ print(f"目标设备 tensor: {gpu_tensor.device}")
 result = gpu_tensor @ gpu_tensor.T
 print(f"矩阵乘法结果 shape: {result.shape}, device: {result.device}")
 
-print("\n✓ 示例 01 运行完成")
+print("\n示例 01 运行完成")

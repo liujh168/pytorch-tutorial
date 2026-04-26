@@ -138,6 +138,6 @@ print("\n=== 4. 与 nn.MultiheadAttention 对比 ===")
 builtin_mha = nn.MultiheadAttention(d_model, n_heads, batch_first=True).to(device)
 out_builtin, _ = builtin_mha(x, x, x)
 print(f"内置 MHA 输出 shape: {out_builtin.shape}")
-print(f"自定义 MHA 输出 shape: {out.shape}  (形状一致 ✓)")
+print(f"自定义 MHA 输出 shape: {out.shape}  (形状一致)")
 
-print("\n✓ 示例 07 运行完成")
+print("\n示例 07 运行完成")

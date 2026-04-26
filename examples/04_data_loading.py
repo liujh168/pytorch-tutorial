@@ -111,4 +111,4 @@ std  = all_X.std(dim=0)
 print(f"特征均值: {mean}")
 print(f"特征标准差: {std}")
 
-print("\n✓ 示例 04 运行完成")
+print("\n示例 04 运行完成")

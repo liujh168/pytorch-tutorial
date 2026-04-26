@@ -145,4 +145,4 @@ for i in range(10):
 # ── 6. 保存模型 ───────────────────────────────────────────────
 torch.save(model.state_dict(), "examples/mnist_cnn.pth")
 print("\n模型已保存到 examples/mnist_cnn.pth")
-print("\n✓ 示例 09 运行完成")
+print("\n示例 09 运行完成")

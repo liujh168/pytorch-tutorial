@@ -119,4 +119,4 @@ print(f"加载成功，参数相同: {all(torch.allclose(p1, p2) for p1, p2 in z
 
 os.unlink(path)
 
-print("\n✓ 示例 03 运行完成")
+print("\n示例 03 运行完成")

@@ -18,12 +18,12 @@ print(f"使用设备: {device}\n")
 print("=== 1. 基础梯度计算 ===")
 
 x = torch.tensor(3.0, requires_grad=True)
-y = x ** 2 + 2 * x + 1   # y = x² + 2x + 1
+y = x ** 2 + 2 * x + 1   # y = x^2 + 2x + 1
 
 y.backward()              # 反向传播计算梯度
 # dy/dx = 2x + 2，在 x=3 时 = 8
 print(f"x = {x.item()}")
-print(f"y = x²+2x+1 = {y.item()}")
+print(f"y = x^2+2x+1 = {y.item()}")
 print(f"dy/dx = {x.grad.item()}  (理论值: 2*3+2=8)")
 
 
@@ -32,13 +32,13 @@ print("\n=== 2. 多变量梯度 ===")
 a = torch.tensor(2.0, requires_grad=True)
 b = torch.tensor(3.0, requires_grad=True)
 
-# z = a³ + b²
+# z = a^3 + b^2
 z = a ** 3 + b ** 2
 z.backward()
 
 print(f"a={a.item()}, b={b.item()}")
-print(f"z = a³+b² = {z.item()}")
-print(f"dz/da = 3a² = {a.grad.item()}  (理论值: {3*4})")
+print(f"z = a^3+b^2 = {z.item()}")
+print(f"dz/da = 3a^2 = {a.grad.item()}  (理论值: {3*4})")
 print(f"dz/db = 2b  = {b.grad.item()}  (理论值: {2*3})")
 
 
@@ -106,4 +106,4 @@ for step in range(20):
 
 print(f"收敛后 w = {w.item():.4f}  (目标: 5.0)")
 
-print("\n✓ 示例 02 运行完成")
+print("\n示例 02 运行完成")
